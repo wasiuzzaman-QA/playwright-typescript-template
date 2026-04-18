@@ -1,0 +1,178 @@
+name: Playwright E2E
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Nightly regression at 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: staging
+        type: choice
+        options: [development, staging, production]
+      grep:
+        description: 'Tag filter (e.g. @smoke)'
+        required: false
+        default: '@smoke'
+
+# ── Jobs ──────────────────────────────────────────────────────
+
+jobs:
+
+  # 1. Lint & type-check ────────────────────────────────────────
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: npm }
+      - run: npm ci
+      - run: npm run type-check
+      - run: npm run lint
+
+  # 2. Auth setup (runs once, shares state to test jobs) ────────
+  auth-setup:
+    name: Auth Setup
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: npm }
+      - run: npm ci
+      - run: npx playwright install chromium --with-deps
+
+      - name: Write .env
+        run: |
+          cat <<EOF > .env
+          ENV=${{ inputs.environment || 'staging' }}
+          DEV_BASE_URL=${{ secrets.DEV_BASE_URL }}
+          STAGING_BASE_URL=${{ secrets.STAGING_BASE_URL }}
+          PROD_BASE_URL=${{ secrets.PROD_BASE_URL }}
+          ADMIN_EMAIL=${{ secrets.ADMIN_EMAIL }}
+          ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}
+          TEST_USER_EMAIL=${{ secrets.TEST_USER_EMAIL }}
+          TEST_USER_PASSWORD=${{ secrets.TEST_USER_PASSWORD }}
+          API_BASE_URL=${{ secrets.API_BASE_URL }}
+          API_KEY=${{ secrets.API_KEY }}
+          HEADLESS=true
+          EOF
+
+      - run: npm run auth:setup
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: auth-state
+          path: .auth/
+          retention-days: 1
+
+  # 3. Tests — matrix across browsers ──────────────────────────
+  test:
+    name: 'Test [${{ matrix.browser }}]'
+    runs-on: ubuntu-latest
+    needs: auth-setup
+
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: npm }
+      - run: npm ci
+      - run: npx playwright install ${{ matrix.browser }} --with-deps
+
+      - name: Write .env
+        run: |
+          cat <<EOF > .env
+          ENV=${{ inputs.environment || 'staging' }}
+          DEV_BASE_URL=${{ secrets.DEV_BASE_URL }}
+          STAGING_BASE_URL=${{ secrets.STAGING_BASE_URL }}
+          PROD_BASE_URL=${{ secrets.PROD_BASE_URL }}
+          ADMIN_EMAIL=${{ secrets.ADMIN_EMAIL }}
+          ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}
+          TEST_USER_EMAIL=${{ secrets.TEST_USER_EMAIL }}
+          TEST_USER_PASSWORD=${{ secrets.TEST_USER_PASSWORD }}
+          API_BASE_URL=${{ secrets.API_BASE_URL }}
+          API_KEY=${{ secrets.API_KEY }}
+          HEADLESS=true
+          EOF
+
+      - uses: actions/download-artifact@v4
+        with: { name: auth-state, path: .auth/ }
+
+      - name: Run tests
+        env:
+          CI: 'true'
+        run: |
+          npx playwright test \
+            --project=${{ matrix.browser }} \
+            --grep="${{ inputs.grep || '@smoke' }}"
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ matrix.browser }}
+          path: reports/html/
+          retention-days: 14
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.browser }}
+          path: reports/artifacts/
+          retention-days: 7
+
+  # 4. Publish report to GitHub Pages (main branch only) ────────
+  publish-report:
+    name: Publish Report
+    runs-on: ubuntu-latest
+    needs: test
+    if: always() && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: report-*
+          path: merged-reports/
+          merge-multiple: true
+      - uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir:  merged-reports/
+
+  # 5. Slack notification on failure ────────────────────────────
+  notify:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: test
+    if: failure()
+    steps:
+      - uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "❌ *E2E tests failed* on `${{ github.ref_name }}`",
+              "attachments": [{
+                "color": "danger",
+                "fields": [
+                  { "title": "Repo",   "value": "${{ github.repository }}", "short": true },
+                  { "title": "Branch", "value": "${{ github.ref_name }}",   "short": true },
+                  { "title": "Run",    "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View>" }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL:  ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

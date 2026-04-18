@@ -1,0 +1,19 @@
+node_modules/
+dist/
+
+# Auth state — NEVER commit
+.auth/*.json
+
+# Secrets — NEVER commit
+.env
+
+# Test output
+reports/
+test-results/
+
+# OS & editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

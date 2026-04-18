@@ -1,0 +1,33 @@
+{
+  "name": "playwright-ts-base",
+  "version": "0.1.0",
+  "description": "Playwright + TypeScript base template — POM, fixtures, multi-env, CI/CD",
+  "scripts": {
+    "test":            "playwright test",
+    "test:headed":     "playwright test --headed",
+    "test:smoke":      "playwright test --grep @smoke",
+    "test:regression": "playwright test --grep @regression",
+    "test:debug":      "playwright test --debug",
+    "test:ui":         "playwright test --ui",
+    "test:dev":        "cross-env ENV=development playwright test",
+    "test:staging":    "cross-env ENV=staging playwright test",
+    "test:prod":       "cross-env ENV=production playwright test",
+    "auth:setup":      "playwright test --project=setup",
+    "report":          "playwright show-report reports/html",
+    "codegen":         "playwright codegen",
+    "lint":            "eslint src/**/*.ts --fix",
+    "type-check":      "tsc --noEmit"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.44.0",
+    "dotenv":           "^16.4.5",
+    "cross-env":        "^7.0.3"
+  },
+  "devDependencies": {
+    "@types/node":                    "^20.12.12",
+    "typescript":                     "^5.4.5",
+    "@typescript-eslint/eslint-plugin": "^7.10.0",
+    "@typescript-eslint/parser":      "^7.10.0",
+    "eslint":                         "^8.57.0"
+  }
+}
